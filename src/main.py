@@ -14,29 +14,52 @@ chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
 collection = chroma_client.get_or_create_collection("documents")
 
+def get_overlapping_chunks(text, chunk_size=1000, overlap=200):
+   chunks = []
+   start = 0
+   while start < len(text):
+      end = start + chunk_size
+      chunks.append(text[start:end])
+      start += (chunk_size - overlap)
+   return chunks
+
 def add_chunks(text_list):
-   if (collection.count() != 0):
+   if collection.count() != 0:
       return
 
-   chunks = []
-   for path in text_list:
-      text = path.read_text(encoding="utf-8")     
-      # In those manuals text is logically splited by pages. 
-      # Therefore I decided to make chunks not with the fixed length
-      lst = text.split("\n\n")
-      chunks.extend(lst)
+   all_chunks, all_metadatas, all_ids = [], [], []
+   global_idx = 0
    
-   collection.add(
-      documents=chunks,
-      ids=[f"chunk_{i}" for i in range(len(chunks))]
-   )
+   for path in text_list:
+      text = path.read_text(encoding="utf-8")
+      chunks = get_overlapping_chunks(text)
+      
+      for i, chunk_content in enumerate(chunks):
+         if not chunk_content.strip():
+               continue
+         
+         all_chunks.append(chunk_content)
+         all_metadatas.append({
+               "source": path.name.replace(".txt", ".pdf"), 
+               "chunk_index": i + 1
+         })
+         all_ids.append(f"chunk_{global_idx}")
+         global_idx += 1
 
-def retrieve_context(question, n_chunks=5):
-   retrieved_chunks = collection.query(
-      query_texts=[question],
-      n_results=n_chunks
-   )
-   return "\n\n".join(retrieved_chunks["documents"][0])
+   collection.add(documents=all_chunks, metadatas=all_metadatas, ids=all_ids)
+
+def retrieve_context(question, n_results=3):
+    results = collection.query(
+        query_texts=[question],
+        n_results=n_results
+    )
+    
+    context_parts = []
+    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+        source_info = f"[Source: {meta['source']}, Page: {meta.get('page', 'N/A')}]"
+        context_parts.append(f"{source_info}\n{doc}")
+        
+    return "\n\n---\n\n".join(context_parts)
 
 def ask_question(question):
    context = retrieve_context(question)
